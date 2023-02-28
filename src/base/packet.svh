@@ -6,15 +6,26 @@ import uvm_pkg::*;
 
 typedef class Packet;
 typedef class EtherPacket;
-
-typedef bit [7:0] u8_t;
-typedef u8_t byte_t;
+typedef class PacketPrinter;
 
 // TODO: uvm_queue
 typedef Packet packet_queue_t[$];
 
 //=============================================================================
-class PacketData;
+class MyObject extends uvm_object;
+    `uvm_object_utils(MyObject)
+
+    function new(string name = "");
+        super.new(name);
+    endfunction
+
+    function void do_print(uvm_printer printer);
+        printer.print_string("test_str", "some string");
+    endfunction
+endclass
+
+//=============================================================================
+class PacketContent;
     byte_t data[];
 
     function int size();
@@ -27,96 +38,12 @@ class PacketData;
 endclass
 
 //=============================================================================
-class TablePacketPrinter extends uvm_printer;
-    /*local*/ bit disabled[string];
-    /*local*/ //text_style_t colored[string];
-
-    int depth = 0;
-
-    //-------------------------------------------------------------------------
-    function new();
-        knobs.type_name = 0;
-        knobs.size = 0;
-    endfunction
-
-    //-------------------------------------------------------------------------
-    function bit is_disabled(string path);
-        foreach (disabled[key]) begin
-            if (uvm_is_match(key, path)) begin
-                return 1;
-            end
-        end
-
-        return 0;
-    endfunction
-
-    //-------------------------------------------------------------------------
-    function void add_filter(string filter);
-        if (disabled.exists(filter))
-            return;
-
-        disabled[filter] = 1;
-    endfunction
-
-    //-------------------------------------------------------------------------
-    function void delete_filter(string filter);
-        foreach (disabled[key]) begin
-            if (uvm_is_match(filter, key)) begin
-                disabled.delete(key);
-            end
-        end
-    endfunction
-
-    //-------------------------------------------------------------------------
-    static function int find_sep(string path);
-        if (path.len < 2)
-            return -1;
-
-        for (int i = 0; i < (path.len - 1); i++)
-            if ((path[i] == ":") && (path[i+1] == ":")) begin
-                return i;
-            end
-
-        return -1;
-    endfunction
-
-    //-------------------------------------------------------------------------
-    static function void split(string name, output string path[$]);
-        string s = name;
-        int sep_pos = find_sep(name);
-
-        while (sep_pos != -1) begin
-            path.push_back(s.substr(0, sep_pos - 1));
-            s = s.substr(sep_pos + 2, s.len - 1);
-            sep_pos = find_sep(s);
-        end
-
-        path.push_back(s);
-    endfunction
-
-    //-------------------------------------------------------------------------
-    function void print_field(
-        string name,
-        uvm_bitstream_t value,
-        int size,
-        uvm_radix_enum radix = UVM_NORADIX,
-        byte scope_separator = ".",
-        string type_name = ""
-    );
-        if (is_disabled(name))
-            return;
-
-        //super.print_field(name, value, size, radix, scope_separator, type_name);
-    endfunction
-endclass
-
-//=============================================================================
 class Parser;
-    local PacketData m_data;
+    local PacketContent m_data;
     local int m_count;
     local bit m_error;
 
-    function new(PacketData data);
+    function new(PacketContent data);
         m_data = data;
         m_count = 0;
         m_error = 0;
@@ -174,7 +101,7 @@ virtual class Packet extends uvm_object;
     endfunction
 
     //-------------------------------------------------------------------------
-    static function Packet parse(PacketData data);
+    static function Packet parse(PacketContent data);
         Packet parent = EtherPacket::new;
         Packet derived;
         int level = 0;
@@ -195,7 +122,7 @@ virtual class Packet extends uvm_object;
             level++;
 
             if (level > m_max_parsing_level) begin
-                uvm_report_fatal("NVC/PACKET/PARSING",
+                uvm_report_fatal("NVL/PACKET/PARSING",
                     $sformatf("Parsing level exceeds maximum value (%0d)", m_max_parsing_level));
             end
         end
@@ -216,7 +143,7 @@ virtual class Packet extends uvm_object;
 
             if (packet.is_derived_from(parent)) begin
                 if (m_debug_mode && is_find) begin
-                    uvm_report_fatal("NVC/PACKET/PARSING", "More than one parsing variant");
+                    uvm_report_fatal("NVL/PACKET/PARSING", "More than one parsing variant");
                 end
                 else begin
                     Packet derived;
@@ -232,6 +159,22 @@ virtual class Packet extends uvm_object;
         end
 
         return null;
+    endfunction
+
+    //-------------------------------------------------------------------------
+    function void print(uvm_printer printer = null);
+        if (printer == null)
+            printer = PacketPrinter::new();
+
+        super.print(printer);
+    endfunction
+
+    //-------------------------------------------------------------------------
+    function string sprint(uvm_printer printer = null);
+        if (printer == null)
+            printer = PacketPrinter::new();
+
+        return super.sprint(printer);
     endfunction
 
     //-------------------------------------------------------------------------
@@ -263,6 +206,7 @@ class EtherPacket extends Packet;
     endfunction
 
     function void do_print(uvm_printer printer);
+        printer.print_field("ethernet::_size_", 14, 0);
         printer.print_field("ethernet::dst_mac", dst_mac, $bits(dst_mac), UVM_HEX);
         printer.print_field("ethernet::src_mac", src_mac, $bits(src_mac), UVM_HEX);
         printer.print_field("ethernet::ether_type", ether_type, $bits(ether_type), UVM_HEX);
@@ -297,6 +241,8 @@ class Ip4Packet extends EtherPacket;
 
     bit [7:0] protocol;
 
+    MyObject obj = new;
+
     function new(string name = "");
         super.new(name);
     endfunction
@@ -320,6 +266,7 @@ class Ip4Packet extends EtherPacket;
     function void do_print(uvm_printer printer);
         super.do_print(printer);
         printer.print_field("ipv4::protocol", protocol, $bits(protocol), UVM_DEC);
+        printer.print_object("my_object", obj);
     endfunction
 
     //-------------------------------------------------------------------------
@@ -371,28 +318,5 @@ class CustomPacket extends Ip4Packet;
         return 0;
     endfunction
 endclass
-
-//*****************************************************************************
-class Test;
-    static function void test();
-        int x = 0;
-        x++;
-        $display("x = %0d", x);
-    endfunction
-endclass
-
-module tb;
-    initial begin
-        automatic PacketData data = new;
-        automatic Packet pkt;
-        automatic TablePacketPrinter printer = new;
-
-        data.data = '{'h1A, 'h2B, 'h3C, 'h4D, 'h5E, 'h6F, 'h70, 'h71, 'h72, 'h73, 'h74, 'h75, 'h08, 'h00, 'h56, 'h78};
-        pkt = Packet::parse(data);
-
-        //printer.disabled["ethernet::*"] = 1;
-        //pkt.print(printer);
-    end
-endmodule
 
 `endif
